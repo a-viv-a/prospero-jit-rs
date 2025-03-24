@@ -10,7 +10,7 @@ fn main() {
     let dim: usize = 1024;
 
     // this might be especially evil...
-    let step = 1f64 / dim as f64;
+    let step = 2f64 / dim as f64;
 
     let xy_fn = translate(src);
     let bytes = (0..dim)
