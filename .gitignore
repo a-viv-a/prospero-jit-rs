@@ -2,3 +2,5 @@
 
 # nix
 .direnv
+
+out.ppm
