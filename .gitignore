@@ -4,4 +4,4 @@
 .direnv
 
 out.ppm
-out.png
+out*.png
