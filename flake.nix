@@ -34,6 +34,7 @@
               bacon
               just
               fastmod
+              hyperfine
             ];
             RUST_SRC_PATH = rustPlatform.rustLibSrc;
           };
