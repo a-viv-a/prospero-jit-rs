@@ -1,8 +1,10 @@
 use std::{fs::File, io::Write};
 
+use bitvec::{prelude::*, view::BitView};
+use itertools::Itertools;
 use rayon::prelude::*;
 
-use translate::translate;
+use translate::{translate, SIMD_WIDTH};
 
 mod translate;
 
@@ -11,26 +13,30 @@ fn main() {
     let dim: usize = 1024;
 
     // this might be especially evil...
-    let step = 2f64 / dim as f64;
+    let step = 2f32 / dim as f32;
 
-    let xy_fn = translate(src);
+    let xy_fn = translate(src, step);
     let bytes = (0..dim)
-        .flat_map(|y_step| (0..dim).rev().map(move |x_step| (x_step, y_step)))
+        .flat_map(|y_step| {
+            // this ugly code lets us step 8 xes at once since each call computes 8 x values
+            (0..(dim / SIMD_WIDTH))
+                .rev()
+                .map(move |x_step| (x_step * SIMD_WIDTH, y_step))
+        })
         .rev()
-        .map(|(x_step, y_step)| (-1f64 + step * x_step as f64, -1f64 + step * y_step as f64))
+        .map(|(x_step, y_step)| (-1f32 + step * x_step as f32, -1f32 + step * y_step as f32))
         .collect::<Vec<_>>()
         .into_par_iter()
-        .map(|(x, y)| {
-            let b = xy_fn(x, y);
-            if b != 0 {
-                true
-            } else {
-                false
-            }
-        })
-        .map(|b| match b {
-            true => 255u8,
-            false => 0u8,
+        .flat_map(|(x, y)| {
+            let mask = xy_fn(x, y) as u8;
+            mask.view_bits::<Lsb0>()
+                .into_iter()
+                .take(4)
+                .map(|b| match *b {
+                    true => 255u8,
+                    false => 0u8,
+                })
+                .collect_vec()
         })
         .collect::<Vec<_>>();
 

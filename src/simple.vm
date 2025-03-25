@@ -1,0 +1,6 @@
+# 1/4th filled in?
+_0 var-x
+_1 var-y
+_2 add _0 _1
+_3 const 1
+_4 sub _2 _3

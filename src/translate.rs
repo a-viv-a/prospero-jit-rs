@@ -9,16 +9,17 @@ use cranelift::{
         Type,
     },
 };
-
-const FT: Type = types::F64;
-type FT = f64;
+use itertools::Itertools;
 
 fn variable_index(v: &str) -> usize {
     usize::from_str_radix(&v[1..], 16).expect("passed a valid variable")
 }
 
-pub fn translate(src: &str) -> extern "C" fn(FT, FT) -> i8 {
-    let mut flag_builder = settings::builder();
+pub const SIMD_WIDTH: usize = 4;
+
+/// params are (x_base, y) -> i8
+pub fn translate(src: &str, x_stepsize: f32) -> extern "C" fn(f32, f32) -> i8 {
+    let flag_builder = settings::builder();
     let isa_builder = cranelift::native::builder().unwrap_or_else(|msg| {
         panic!("host machine is not supported: {msg}");
     });
@@ -30,12 +31,12 @@ pub fn translate(src: &str) -> extern "C" fn(FT, FT) -> i8 {
     let mut ctx = module.make_context();
 
     let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(FT));
-    sig.params.push(AbiParam::new(FT));
+    sig.params.push(AbiParam::new(types::F32));
+    sig.params.push(AbiParam::new(types::F32));
     sig.returns.push(AbiParam::new(types::I8));
 
     let mut fn_builder_ctx = FunctionBuilderContext::new();
-    let mut func = module
+    let func = module
         .declare_function("prospero_calc", Linkage::Local, &sig)
         .unwrap();
 
@@ -62,11 +63,30 @@ pub fn translate(src: &str) -> extern "C" fn(FT, FT) -> i8 {
         // WARN: this is bad! relying on ordering of instruction variables...
         kv.push(match op {
             "const" => {
-                let val = tokens.next().unwrap();
-                builder.ins().f64const(val.parse::<f64>().unwrap())
+                let float_str = tokens.next().unwrap();
+                let value = builder.ins().f32const(float_str.parse::<f32>().unwrap());
+                // create an approp vector with all lanes having this value
+                builder.ins().splat(types::F32X4, value)
             }
-            "var-x" => builder.block_params(block)[0],
-            "var-y" => builder.block_params(block)[1],
+            "var-x" => {
+                let x_base = builder.block_params(block)[0];
+                let x_vec_base = builder.ins().splat(types::F32X4, x_base);
+
+                // WARN: probably bugbear live here
+                let incrementing = builder.func.dfg.constants.insert(
+                    (0..SIMD_WIDTH)
+                        .map(|n| n as f32 * x_stepsize)
+                        .flat_map(|n| n.to_ne_bytes())
+                        .collect(),
+                );
+
+                let step_vec = builder.ins().vconst(types::F32X4, incrementing);
+                builder.ins().fadd(step_vec, x_vec_base)
+            }
+            "var-y" => {
+                let y_val = builder.block_params(block)[1];
+                builder.ins().splat(types::F32X4, y_val)
+            }
             // TODO: does compiler optimize the double match away?
             "neg" | "square" | "sqrt" => {
                 let val = kv[variable_index(tokens.next().unwrap())];
@@ -96,17 +116,24 @@ pub fn translate(src: &str) -> extern "C" fn(FT, FT) -> i8 {
         debug_assert_eq!(key, kv.len() - 1);
     }
 
-    let zero = builder.ins().f64const(0f64);
-    let sign = builder
+    // TODO: single instruction with const?
+    let zero = builder.ins().f32const(0f32);
+    let zero_vec = builder.ins().splat(types::F32X4, zero);
+    let signs_vec = builder
         .ins()
-        .fcmp(FloatCC::LessThan, *kv.last().unwrap(), zero);
-
-    builder.ins().return_(&[sign]);
+        .fcmp(FloatCC::LessThan, *kv.last().unwrap(), zero_vec);
+    let signs = builder.ins().vhigh_bits(types::I8, signs_vec);
+    builder.ins().return_(&[signs]);
 
     builder.finalize();
+    // println!("{}", ctx.func.display());
+    // match module.define_function(func, &mut ctx) {
+    //     Err(e) => eprintln!("{e:#?}"),
+    //     Ok(()) => {}
+    // }
     module.define_function(func, &mut ctx).unwrap();
     module.finalize_definitions().unwrap();
     let code = module.get_finalized_function(func);
 
-    unsafe { mem::transmute::<_, extern "C" fn(FT, FT) -> i8>(code) }
+    unsafe { mem::transmute::<_, extern "C" fn(f32, f32) -> i8>(code) }
 }

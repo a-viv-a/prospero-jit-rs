@@ -7,6 +7,7 @@ edition = "2021"
 name = "prospero-jit-rs"
 
 [dependencies]
+bitvec = "1.0.1"
 cranelift = { version = "0.116.1", features = ["jit", "module", "native"] }
 itertools = "0.14.0"
 rayon = "1.10.0"
